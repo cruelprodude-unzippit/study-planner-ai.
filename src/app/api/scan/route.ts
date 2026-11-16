@@ -2,66 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { GoogleGenAI } from "@google/genai";
 
-export const maxDuration = 26;
-
-const MODELS = [
-  "gemini-3.8-flash",
-  "gemini-3.8-flash-lite",
-  "gemini-3.0-flash",
-];
-
-async function generateWithFallback(
-  ai: GoogleGenAI,
-  cleanBase64: string,
-  mimeType: string,
-  prompt: string
-) {
-  let lastError: unknown = null;
-
-  for (const model of MODELS) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const res = await ai.models.generateContent({
-          model,
-          contents: [
-            {
-              inlineData: {
-                data: cleanBase64,
-                mimeType: mimeType || "image/jpeg",
-              },
-            },
-            prompt,
-          ],
-          config: {
-            responseMimeType: "application/json",
-          },
-        });
-
-        if (res.text) {
-          return res.text;
-        }
-      } catch (err: unknown) {
-        lastError = err;
-        const msg = err instanceof Error ? err.message : String(err);
-        const isTransient =
-          msg.includes("503") ||
-          msg.includes("429") ||
-          msg.includes("UNAVAILABLE") ||
-          msg.includes("high demand") ||
-          msg.includes("RESOURCE_EXHAUSTED");
-
-        if (isTransient && attempt === 0) {
-          await new Promise((r) => setTimeout(r, 1200));
-          continue;
-        }
-        break;
-      }
-    }
-  }
-
-  throw lastError || new Error("AI servers are busy. Please try again in a moment.");
-}
-
 export async function POST(req: NextRequest) {
   try {
     const authHeader = req.headers.get("authorization");
@@ -128,15 +68,36 @@ export async function POST(req: NextRequest) {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
     const prompt =
-      "Read ONLY the visible textbook text in this image. Return compact JSON with: `topic_title` (short string), `clean_notes` (array of 5 short bullet strings), and `questions` (array of 5 MCQs, each with `question` string, `options` array of 4 short strings, `correct_index` number 0-3, and `exact_source_quote` short verbatim quote from the image).";
+      "Extract key points from this textbook page. Return compact JSON: {\"topic_title\":\"short title\",\"clean_notes\":[\"note 1\",\"note 2\",\"note 3\",\"note 4\",\"note 5\"],\"questions\":[{\"question\":\"q\",\"options\":[\"a\",\"b\",\"c\",\"d\"],\"correct_index\":0,\"exact_source_quote\":\"short verbatim quote\"}]} (5 notes, 5 MCQs, keep every string under 12 words).";
 
-    const rawText = await generateWithFallback(
-      ai,
-      cleanBase64,
-      mimeType,
-      prompt
-    );
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8200);
 
+    let aiResponse;
+    try {
+      aiResponse = await ai.models.generateContent({
+        model: "gemini-3.8-flash-lite",
+        contents: [
+          {
+            inlineData: {
+              data: cleanBase64,
+              mimeType: mimeType || "image/jpeg",
+            },
+          },
+          prompt,
+        ],
+        config: {
+          responseMimeType: "application/json",
+          maxOutputTokens: 900,
+          temperature: 0.2,
+          abortSignal: controller.signal,
+        },
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    const rawText = aiResponse.text || "";
     const cleanedJson = rawText
       .replace(/^```json\s*/i, "")
       .replace(/```\s*$/i, "")
@@ -147,7 +108,7 @@ export async function POST(req: NextRequest) {
       parsed = JSON.parse(cleanedJson);
     } catch {
       return NextResponse.json(
-        { error: "Could not read textbook text clearly. Try a sharper photo." },
+        { error: "Could not read text clearly. Upload a clearer or cropped photo." },
         { status: 422 }
       );
     }
@@ -156,7 +117,7 @@ export async function POST(req: NextRequest) {
       .from("study_decks")
       .insert({
         user_id: user.id,
-        topic_title: parsed.topic_title || "Untitled Study Note",
+        topic_title: parsed.topic_title || "Study Notes",
         clean_notes: parsed.clean_notes || [],
         questions: parsed.questions || [],
       })
@@ -182,12 +143,16 @@ export async function POST(req: NextRequest) {
       scans_used: updatedScans,
     });
   } catch (err: unknown) {
-    const rawMsg =
-      err instanceof Error ? err.message : "Something went wrong scanning";
-    const friendlyMsg =
-      rawMsg.includes("503") || rawMsg.includes("UNAVAILABLE")
-        ? "Google AI is temporarily busy. Please tap Scan again in a few seconds."
-        : rawMsg;
-    return NextResponse.json({ error: friendlyMsg }, { status: 500 });
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("abort") || msg.includes("AbortError")) {
+      return NextResponse.json(
+        { error: "Image took too long. Crop closer to the text and try again." },
+        { status: 504 }
+      );
+    }
+    return NextResponse.json(
+      { error: "Scan failed: " + msg.slice(0, 120) },
+      { status: 500 }
+    );
   }
 }
