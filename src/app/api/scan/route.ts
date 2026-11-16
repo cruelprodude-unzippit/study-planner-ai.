@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { GoogleGenAI } from "@google/genai";
 
+export const maxDuration = 26;
+
 export async function POST(req: NextRequest) {
   try {
     const authHeader = req.headers.get("authorization");
@@ -68,7 +70,7 @@ export async function POST(req: NextRequest) {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
     const prompt =
-      "Analyze ONLY the visible text in this textbook image. Return valid JSON with: `topic_title` (string), `clean_notes` (array of 5 concise bullet strings), and `questions` (array of 5 objects, each with `question` string, `options` array of 4 strings, `correct_index` number 0-3, and `exact_source_quote` copied word-for-word from the image proving the answer).";
+      "Read ONLY the visible textbook text in this image. Return compact JSON with: `topic_title` (short string), `clean_notes` (array of 5 short bullet strings), and `questions` (array of 5 MCQs, each with `question` string, `options` array of 4 short strings, `correct_index` number 0-3, and `exact_source_quote` short verbatim quote from the image).";
 
     const aiResponse = await ai.models.generateContent({
       model: "gemini-3.8-flash",
