@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
     let aiResponse;
     try {
       aiResponse = await ai.models.generateContent({
-        model: "gemini-3.8-flash-lite",
+        model: "gemini-3.8-flash",
         contents: [
           {
             inlineData: {
