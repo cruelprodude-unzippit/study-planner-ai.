@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
       "Analyze ONLY the visible text in this textbook image. Return valid JSON with: `topic_title` (string), `clean_notes` (array of 5 concise bullet strings), and `questions` (array of 5 objects, each with `question` string, `options` array of 4 strings, `correct_index` number 0-3, and `exact_source_quote` copied word-for-word from the image proving the answer).";
 
     const aiResponse = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.8-flash",
       contents: [
         {
           inlineData: {
